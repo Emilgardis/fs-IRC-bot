@@ -45,6 +45,9 @@ coverage.xml
 
 # Translations
 *.mo
+# Own
+.ropeproject
+
 *.pot
 
 # Django stuff:
