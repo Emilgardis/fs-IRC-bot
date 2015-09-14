@@ -1,2 +1,3 @@
 # fs-IRC-bot
-IRC bot for Forsmarksskola "Forsmarks school" internal IRC network
+IRC bot for Forsmarksskolas "Forsmarks schools" internal IRC network made by Emil Gardström in FS14B
+
