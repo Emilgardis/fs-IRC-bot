@@ -1,10 +1,12 @@
 #!usr/env/python3.4
 # -*- encoding: utf-8
-"""test bot for irc"""
+# Licensed under MIT License (c) 2015
+"""Bot for irc"""
 import socket
 from functools import partial
 import logging
 import requests
+import threading
 
 logging.basicConfig(
     format='%(asctime)s %(levelname)-8s %(message)s',
@@ -12,6 +14,12 @@ logging.basicConfig(
     level=logging.DEBUG,
     filename='botlog.txt')
 logging.info("New session")
+# Fix parsing for better compatability with input
+console = logging.StreamHandler()
+console.setLevel(logging.DEBUG)
+format = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+console.setFormatter(format)
+logging.getLogger('').addHandler(console)
 
 
 class IRCBot:
@@ -24,26 +32,37 @@ class IRCBot:
     sPONG = partial("PONG {} \r\n".format)
     cIgnore = []
 
-    def __init__(self, addr, pass_=None, nick='BotEMILG', rname='Bot Gardström', user='Py Bot'):
+    def __init__(self, addr, pass_=None, nick='BotEMILG', rname='Bot Gardström',
+                 user='Py Bot'):
+        self.addr = addr
         self.nick = nick
         self.rname = rname
         self.user = user
         self.connected = False
-        self.host = "ts01.forsmarksskola.se"
+        self.host = "ts01.forsmarksskola.se"  # TODO Get from NOTICE Auth
 
         self.irc_sock = socket.socket()
-        self.irc_sock.connect(addr)
+        self.irc_sock.connect(self.addr)
         self.buffer_ = ""
         if pass_:
             self.send_line(self.sPASS(pass_))
         self.send_line(self.sNICK(nick))
         self.send_line(self.sUSER(user, rname))
 
-    def wait(self):
-        """Loop for recv
+    def run(self):
+        def run_listen_server():
+            self.data_received(self.irc_sock.recv(4096).decode('utf-8'))
 
-        Should be made into a parallel function for multiple things"""
-        self.data_received(self.irc_sock.recv(4096).decode('utf-8'))
+        def run_listen_console():
+            self.handle_console(input("> "))
+            pass
+        while True:
+            t_server_input = threading.Thread(target=run_listen_server)
+            t_console_input = threading.Thread(target=run_listen_console)
+            t_server_input.daemon = True
+            t_console_input.deamon = True
+            t_server_input.start()
+            t_console_input.start()
 
     def send_line(self, str_):
         logging.debug("Sent: {}".format(str_))
@@ -56,11 +75,16 @@ class IRCBot:
     def irc_PRIVMSG(self, prefix, params):
         sent_from = prefix.split("!")[0]
         reply_to = params[0] if params[0] != self.nick else sent_from
-        print(reply_to)
-        if params[1].startswith("!docommand"):
+        logging.info("{:9} to {} :{}".format(sent_from, params[0], params[0]))
+        if params[1].startswith("!"):
+            function = getattr(self, "cmd_{}".format(params[1].split()[0][1:]),
+                               None)
+            if function:
+                function(prefix, params)
+        if params[1].startswith("!docommand"):  # TODO Make to function cmd_
             self.send_line(params[1][11:])
             print(params[1][11:])
-        if params[1] == "!joke":
+        if params[1] == "!joke":  # TODO Make to function cmd_
             r = requests.get("http://api.icndb.com/jokes/random")
             self.send_line(self.sPRIVMSG(reply_to, r.json()['value']['joke']))
 
@@ -74,19 +98,29 @@ class IRCBot:
 
     def handle_command(self, prefix, command, params):
         method = getattr(self, "irc_{}".format(command.upper()), None)
+        if command in self.cIgnore:
+            return
         if method:
-            logging.debug("irc_{:9} called from {} with {}".format(command, prefix, params))
+            logging.debug(
+                "irc_{:9} called from {} with {}".format(
+                    command,
+                    prefix,
+                    params))
             method(prefix, params)
-            return None
+            return
         elif command.isdigit():
             response = getattr(self, "rpl_{}".format(command), None)
             if response:
                 logging.debug("rpl_{:9} called with {}".format(command, params))
                 response(prefix, params)
-                return None
+                return
         elif command not in self.cIgnore:
             logging.debug(
                 "{:9} received with {}".format(command, params))
+            return
+
+    def handle_console(self, input_):
+        print("< {}".format(input_))
 
     def data_received(self, data):
         self.buffer_ = self.buffer_ + data
@@ -95,11 +129,13 @@ class IRCBot:
         self.buffer_ = buffer_into[2]
         for line in lines:
             self.handle_command(*parsemsg(line))
+        lines.append("/n")
         with open("bothistory.txt", "a") as file:
             file.write("\n".join(lines))
 
+
 def parsemsg(s):
-    """Breaks a message from an IRC server into its prefix, command, and arguments.
+    """Breaks line from an IRC server into its prefix, command, and arguments.
     Stolen from the twisted project:
     twistedmatrix.com/trac/browser/trunk/twisted/words/protocols/irc.py#54
     """
@@ -121,5 +157,4 @@ bot = None
 global bot
 if __name__ == "__main__":
     bot = IRCBot(("irc.fbin.org", 6667))
-    while True:
-        bot.wait()
+    bot.run()
